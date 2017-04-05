@@ -879,7 +879,7 @@ static int img_commit(int argc, char **argv)
     aio_context = bdrv_get_aio_context(bs);
     aio_context_acquire(aio_context);
     commit_active_start("commit", bs, base_bs, BLOCK_JOB_DEFAULT, 0,
-                        BLOCKDEV_ON_ERROR_REPORT, common_block_job_cb, &cbi,
+                        BLOCKDEV_ON_ERROR_REPORT, NULL, common_block_job_cb, &cbi,
                         &local_err, false);
     aio_context_release(aio_context);
     if (local_err) {
@@ -1001,6 +1001,21 @@ fail:
     return -1;
 }
 
+static int64_t cvtnum(const char *s)
+{
+    int err;
+    uint64_t value;
+
+    err = qemu_strtosz(s, NULL, &value);
+    if (err < 0) {
+        return err;
+    }
+    if (value > INT64_MAX) {
+        return -ERANGE;
+    }
+    return value;
+}
+
 static int img_create(int argc, char **argv)
 {
     int c;
@@ -1012,7 +1027,6 @@ static int img_create(int argc, char **argv)
     Error *local_err = NULL;
     bool quiet = false;
     int64_t sval;
-    char *end;
 
     for(;;) {
         static const struct option long_options[] = {
@@ -1037,9 +1051,8 @@ static int img_create(int argc, char **argv)
             layer_uuid = optarg;
             break;
         case 's':
-            sval = qemu_strtosz_suffix(optarg, &end,
-                                       QEMU_STRTOSZ_DEFSUFFIX_B);
-            if (sval < 0 || *end) {
+            sval = cvtnum(optarg);
+            if (sval < 0) {
                 if (sval == -ERANGE) {
                     error_report("Image size must be less than 8 EiB!");
                 } else {
@@ -1501,7 +1514,7 @@ static BlockBackend *blk_open_enforced_img(const char *filename, Error **errp)
         return NULL;
     }
 
-    bdrv_set_backing_hd(bs, base_bs);
+    bdrv_set_backing_hd(bs, base_bs, errp);
     bdrv_unref(base_bs);
 
     return blk;
