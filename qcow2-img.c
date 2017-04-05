@@ -1027,7 +1027,6 @@ static int img_create(int argc, char **argv)
     Error *local_err = NULL;
     bool quiet = false;
     int64_t sval;
-    char *end;
 
     for(;;) {
         static const struct option long_options[] = {
@@ -1053,7 +1052,7 @@ static int img_create(int argc, char **argv)
             break;
         case 's':
             sval = cvtnum(optarg);
-            if (sval < 0 || *end) {
+            if (sval < 0) {
                 if (sval == -ERANGE) {
                     error_report("Image size must be less than 8 EiB!");
                 } else {
