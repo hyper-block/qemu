@@ -17,6 +17,7 @@
  * License along with this library; if not, see <http://www.gnu.org/licenses/>.
  */
 #include "qemu/osdep.h"
+#include "qemu/main-loop.h"
 #include "cpu.h"
 #include "qemu/host-utils.h"
 #include "exec/helper-proto.h"
@@ -102,28 +103,6 @@ HELPER_ST(sw, stl, uint32_t)
 HELPER_ST(sd, stq, uint64_t)
 #endif
 #undef HELPER_ST
-
-target_ulong helper_clo (target_ulong arg1)
-{
-    return clo32(arg1);
-}
-
-target_ulong helper_clz (target_ulong arg1)
-{
-    return clz32(arg1);
-}
-
-#if defined(TARGET_MIPS64)
-target_ulong helper_dclo (target_ulong arg1)
-{
-    return clo64(arg1);
-}
-
-target_ulong helper_dclz (target_ulong arg1)
-{
-    return clz64(arg1);
-}
-#endif /* TARGET_MIPS64 */
 
 /* 64 bits arithmetic for 32 bits hosts */
 static inline uint64_t get_HILO(CPUMIPSState *env)
@@ -849,7 +828,11 @@ target_ulong helper_mftc0_tcschefback(CPUMIPSState *env)
 
 target_ulong helper_mfc0_count(CPUMIPSState *env)
 {
-    return (int32_t)cpu_mips_get_count(env);
+    int32_t count;
+    qemu_mutex_lock_iothread();
+    count = (int32_t) cpu_mips_get_count(env);
+    qemu_mutex_unlock_iothread();
+    return count;
 }
 
 target_ulong helper_mftc0_entryhi(CPUMIPSState *env)
@@ -1397,7 +1380,9 @@ void helper_mtc0_hwrena(CPUMIPSState *env, target_ulong arg1)
 
 void helper_mtc0_count(CPUMIPSState *env, target_ulong arg1)
 {
+    qemu_mutex_lock_iothread();
     cpu_mips_store_count(env, arg1);
+    qemu_mutex_unlock_iothread();
 }
 
 void helper_mtc0_entryhi(CPUMIPSState *env, target_ulong arg1)
@@ -1431,7 +1416,7 @@ void helper_mtc0_entryhi(CPUMIPSState *env, target_ulong arg1)
     /* If the ASID changes, flush qemu's TLB.  */
     if ((old & env->CP0_EntryHi_ASID_mask) !=
         (val & env->CP0_EntryHi_ASID_mask)) {
-        cpu_mips_tlb_flush(env, 1);
+        cpu_mips_tlb_flush(env);
     }
 }
 
@@ -1446,7 +1431,9 @@ void helper_mttc0_entryhi(CPUMIPSState *env, target_ulong arg1)
 
 void helper_mtc0_compare(CPUMIPSState *env, target_ulong arg1)
 {
+    qemu_mutex_lock_iothread();
     cpu_mips_store_compare(env, arg1);
+    qemu_mutex_unlock_iothread();
 }
 
 void helper_mtc0_status(CPUMIPSState *env, target_ulong arg1)
@@ -1497,7 +1484,9 @@ void helper_mtc0_srsctl(CPUMIPSState *env, target_ulong arg1)
 
 void helper_mtc0_cause(CPUMIPSState *env, target_ulong arg1)
 {
+    qemu_mutex_lock_iothread();
     cpu_mips_store_cause(env, arg1);
+    qemu_mutex_unlock_iothread();
 }
 
 void helper_mttc0_cause(CPUMIPSState *env, target_ulong arg1)
@@ -2021,7 +2010,7 @@ void r4k_helper_tlbinv(CPUMIPSState *env)
             tlb->EHINV = 1;
         }
     }
-    cpu_mips_tlb_flush(env, 1);
+    cpu_mips_tlb_flush(env);
 }
 
 void r4k_helper_tlbinvf(CPUMIPSState *env)
@@ -2031,7 +2020,7 @@ void r4k_helper_tlbinvf(CPUMIPSState *env)
     for (idx = 0; idx < env->tlb->nb_tlb; idx++) {
         env->tlb->mmu.r4k.tlb[idx].EHINV = 1;
     }
-    cpu_mips_tlb_flush(env, 1);
+    cpu_mips_tlb_flush(env);
 }
 
 void r4k_helper_tlbwi(CPUMIPSState *env)
@@ -2145,7 +2134,7 @@ void r4k_helper_tlbr(CPUMIPSState *env)
 
     /* If this will change the current ASID, flush qemu's TLB.  */
     if (ASID != tlb->ASID)
-        cpu_mips_tlb_flush (env, 1);
+        cpu_mips_tlb_flush(env);
 
     r4k_mips_tlb_flush_extra(env, env->tlb->nb_tlb);
 
@@ -2318,12 +2307,16 @@ target_ulong helper_rdhwr_synci_step(CPUMIPSState *env)
 
 target_ulong helper_rdhwr_cc(CPUMIPSState *env)
 {
+    int32_t count;
     check_hwrena(env, 2, GETPC());
 #ifdef CONFIG_USER_ONLY
-    return env->CP0_Count;
+    count = env->CP0_Count;
 #else
-    return (int32_t)cpu_mips_get_count(env);
+    qemu_mutex_lock_iothread();
+    count = (int32_t)cpu_mips_get_count(env);
+    qemu_mutex_unlock_iothread();
 #endif
+    return count;
 }
 
 target_ulong helper_rdhwr_ccres(CPUMIPSState *env)

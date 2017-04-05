@@ -1377,6 +1377,18 @@ void helper_fxrstor(CPUX86State *env, target_ulong ptr)
     }
 }
 
+#if defined(CONFIG_USER_ONLY)
+void cpu_x86_fxsave(CPUX86State *env, target_ulong ptr)
+{
+    helper_fxsave(env, ptr);
+}
+
+void cpu_x86_fxrstor(CPUX86State *env, target_ulong ptr)
+{
+    helper_fxrstor(env, ptr);
+}
+#endif
+
 void helper_xrstor(CPUX86State *env, target_ulong ptr, uint64_t rfbm)
 {
     uintptr_t ra = GETPC();
@@ -1465,7 +1477,7 @@ void helper_xrstor(CPUX86State *env, target_ulong ptr, uint64_t rfbm)
         }
         if (env->pkru != old_pkru) {
             CPUState *cs = CPU(x86_env_get_cpu(env));
-            tlb_flush(cs, 1);
+            tlb_flush(cs);
         }
     }
 }

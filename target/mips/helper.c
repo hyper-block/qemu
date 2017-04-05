@@ -223,12 +223,12 @@ static int get_physical_address (CPUMIPSState *env, hwaddr *physical,
     return ret;
 }
 
-void cpu_mips_tlb_flush(CPUMIPSState *env, int flush_global)
+void cpu_mips_tlb_flush(CPUMIPSState *env)
 {
     MIPSCPU *cpu = mips_env_get_cpu(env);
 
     /* Flush qemu's TLB and discard all shadowed entries.  */
-    tlb_flush(CPU(cpu), flush_global);
+    tlb_flush(CPU(cpu));
     env->tlb->tlb_in_use = env->tlb->nb_tlb;
 }
 
@@ -290,7 +290,7 @@ void cpu_mips_store_status(CPUMIPSState *env, target_ulong val)
 #if defined(TARGET_MIPS64)
     if ((env->CP0_Status ^ old) & (old & (7 << CP0St_UX))) {
         /* Access to at least one of the 64-bit segments has been disabled */
-        cpu_mips_tlb_flush(env, 1);
+        cpu_mips_tlb_flush(env);
     }
 #endif
     if (env->CP0_Config3 & (1 << CP0C3_MT)) {
@@ -450,10 +450,18 @@ int mips_cpu_handle_mmu_fault(CPUState *cs, vaddr address, int rw,
     access_type = ACCESS_INT;
     ret = get_physical_address(env, &physical, &prot,
                                address, rw, access_type);
-    qemu_log_mask(CPU_LOG_MMU,
-             "%s address=%" VADDR_PRIx " ret %d physical " TARGET_FMT_plx
-             " prot %d\n",
-             __func__, address, ret, physical, prot);
+    switch (ret) {
+    case TLBRET_MATCH:
+        qemu_log_mask(CPU_LOG_MMU,
+                      "%s address=%" VADDR_PRIx " physical " TARGET_FMT_plx
+                      " prot %d\n", __func__, address, physical, prot);
+        break;
+    default:
+        qemu_log_mask(CPU_LOG_MMU,
+                      "%s address=%" VADDR_PRIx " ret %d\n", __func__, address,
+                      ret);
+        break;
+    }
     if (ret == TLBRET_MATCH) {
         tlb_set_page(cs, address & TARGET_PAGE_MASK,
                      physical & TARGET_PAGE_MASK, prot | PAGE_EXEC,

@@ -172,7 +172,7 @@ static int tosa_dac_send(I2CSlave *i2c, uint8_t data)
     return 0;
 }
 
-static void tosa_dac_event(I2CSlave *i2c, enum i2c_event event)
+static int tosa_dac_event(I2CSlave *i2c, enum i2c_event event)
 {
     TosaDACState *s = TOSA_DAC(i2c);
 
@@ -194,6 +194,8 @@ static void tosa_dac_event(I2CSlave *i2c, enum i2c_event event)
     default:
         break;
     }
+
+    return 0;
 }
 
 static int tosa_dac_recv(I2CSlave *s)
@@ -261,6 +263,7 @@ static void tosapda_machine_init(MachineClass *mc)
 {
     mc->desc = "Sharp SL-6000 (Tosa) PDA (PXA255)";
     mc->init = tosa_init;
+    mc->block_default_type = IF_IDE;
 }
 
 DEFINE_MACHINE("tosa", tosapda_machine_init)

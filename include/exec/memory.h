@@ -16,16 +16,12 @@
 
 #ifndef CONFIG_USER_ONLY
 
-#define DIRTY_MEMORY_VGA       0
-#define DIRTY_MEMORY_CODE      1
-#define DIRTY_MEMORY_MIGRATION 2
-#define DIRTY_MEMORY_NUM       3        /* num of dirty bits */
-
 #include "exec/cpu-common.h"
 #ifndef CONFIG_USER_ONLY
 #include "exec/hwaddr.h"
 #endif
 #include "exec/memattrs.h"
+#include "exec/ramlist.h"
 #include "qemu/queue.h"
 #include "qemu/int128.h"
 #include "qemu/notify.h"
@@ -375,7 +371,8 @@ void memory_region_init_io(MemoryRegion *mr,
  *
  * @mr: the #MemoryRegion to be initialized.
  * @owner: the object that tracks the region's reference count
- * @name: the name of the region.
+ * @name: Region name, becomes part of RAMBlock name used in migration stream
+ *        must be unique within any device
  * @size: size of the region.
  * @errp: pointer to Error*, to store an error if it happens.
  */
@@ -394,7 +391,8 @@ void memory_region_init_ram(MemoryRegion *mr,
  *
  * @mr: the #MemoryRegion to be initialized.
  * @owner: the object that tracks the region's reference count
- * @name: the name of the region.
+ * @name: Region name, becomes part of RAMBlock name used in migration stream
+ *        must be unique within any device
  * @size: used size of the region.
  * @max_size: max size of the region.
  * @resized: callback to notify owner about used size change.
@@ -416,7 +414,8 @@ void memory_region_init_resizeable_ram(MemoryRegion *mr,
  *
  * @mr: the #MemoryRegion to be initialized.
  * @owner: the object that tracks the region's reference count
- * @name: the name of the region.
+ * @name: Region name, becomes part of RAMBlock name used in migration stream
+ *        must be unique within any device
  * @size: size of the region.
  * @share: %true if memory must be mmaped with the MAP_SHARED flag
  * @path: the path in which to allocate the RAM.
@@ -438,7 +437,8 @@ void memory_region_init_ram_from_file(MemoryRegion *mr,
  *
  * @mr: the #MemoryRegion to be initialized.
  * @owner: the object that tracks the region's reference count
- * @name: the name of the region.
+ * @name: Region name, becomes part of RAMBlock name used in migration stream
+ *        must be unique within any device
  * @size: size of the region.
  * @ptr: memory to be mapped; must contain at least @size bytes.
  */
@@ -500,7 +500,8 @@ void memory_region_init_alias(MemoryRegion *mr,
  *
  * @mr: the #MemoryRegion to be initialized.
  * @owner: the object that tracks the region's reference count
- * @name: the name of the region.
+ * @name: Region name, becomes part of RAMBlock name used in migration stream
+ *        must be unique within any device
  * @size: size of the region.
  * @errp: pointer to Error*, to store an error if it happens.
  */
@@ -517,7 +518,8 @@ void memory_region_init_rom(MemoryRegion *mr,
  * @mr: the #MemoryRegion to be initialized.
  * @owner: the object that tracks the region's reference count
  * @ops: callbacks for write access handling (must not be NULL).
- * @name: the name of the region.
+ * @name: Region name, becomes part of RAMBlock name used in migration stream
+ *        must be unique within any device
  * @size: size of the region.
  * @errp: pointer to Error*, to store an error if it happens.
  */
@@ -628,6 +630,9 @@ static inline bool memory_region_is_romd(MemoryRegion *mr)
  */
 static inline bool memory_region_is_iommu(MemoryRegion *mr)
 {
+    if (mr->alias) {
+        return memory_region_is_iommu(mr->alias);
+    }
     return mr->iommu_ops;
 }
 
@@ -1251,7 +1256,7 @@ void memory_global_dirty_log_start(void);
  */
 void memory_global_dirty_log_stop(void);
 
-void mtree_info(fprintf_function mon_printf, void *f);
+void mtree_info(fprintf_function mon_printf, void *f, bool flatview);
 
 /**
  * memory_region_dispatch_read: perform a read directly to the specified
@@ -1421,11 +1426,11 @@ void stq_be_phys(AddressSpace *as, hwaddr addr, uint64_t val);
 
 struct MemoryRegionCache {
     hwaddr xlat;
-    void *ptr;
     hwaddr len;
-    MemoryRegion *mr;
-    bool is_write;
+    AddressSpace *as;
 };
+
+#define MEMORY_REGION_CACHE_INVALID ((MemoryRegionCache) { .as = NULL })
 
 /* address_space_cache_init: prepare for repeated access to a physical
  * memory region
@@ -1537,6 +1542,11 @@ void stl_le_phys_cached(MemoryRegionCache *cache, hwaddr addr, uint32_t val);
 void stl_be_phys_cached(MemoryRegionCache *cache, hwaddr addr, uint32_t val);
 void stq_le_phys_cached(MemoryRegionCache *cache, hwaddr addr, uint64_t val);
 void stq_be_phys_cached(MemoryRegionCache *cache, hwaddr addr, uint64_t val);
+/* address_space_get_iotlb_entry: translate an address into an IOTLB
+ * entry. Should be called from an RCU critical section.
+ */
+IOMMUTLBEntry address_space_get_iotlb_entry(AddressSpace *as, hwaddr addr,
+                                            bool is_write);
 
 /* address_space_translate: translate an address range into an address space
  * into a MemoryRegion and an address range into that section.  Should be
@@ -1676,7 +1686,7 @@ address_space_read_cached(MemoryRegionCache *cache, hwaddr addr,
                           void *buf, int len)
 {
     assert(addr < cache->len && len <= cache->len - addr);
-    memcpy(buf, cache->ptr + addr, len);
+    address_space_read(cache->as, cache->xlat + addr, MEMTXATTRS_UNSPECIFIED, buf, len);
 }
 
 /**
@@ -1692,7 +1702,7 @@ address_space_write_cached(MemoryRegionCache *cache, hwaddr addr,
                            void *buf, int len)
 {
     assert(addr < cache->len && len <= cache->len - addr);
-    memcpy(cache->ptr + addr, buf, len);
+    address_space_write(cache->as, cache->xlat + addr, MEMTXATTRS_UNSPECIFIED, buf, len);
 }
 
 #endif

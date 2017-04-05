@@ -607,6 +607,9 @@ struct CPUMIPSState {
     uint32_t CP0_TCStatus_rw_bitmask; /* Read/write bits in CP0_TCStatus */
     int insn_flags; /* Supported instruction set */
 
+    /* Fields up to this point are cleared by a CPU reset */
+    struct {} end_reset_fields;
+
     CPU_COMMON
 
     /* Fields from here on are preserved across CPU reset. */
@@ -812,6 +815,7 @@ int cpu_mips_signal_handler(int host_signum, void *pinfo, void *puc);
 
 #define cpu_init(cpu_model) CPU(cpu_mips_init(cpu_model))
 bool cpu_supports_cps_smp(const char *cpu_model);
+bool cpu_supports_isa(const char *cpu_model, unsigned int isa);
 void cpu_set_exception_base(int vp_index, target_ulong address);
 
 /* TODO QOM'ify CPU reset and remove */
@@ -1051,7 +1055,7 @@ static inline void compute_hflags(CPUMIPSState *env)
     }
 }
 
-void cpu_mips_tlb_flush(CPUMIPSState *env, int flush_global);
+void cpu_mips_tlb_flush(CPUMIPSState *env);
 void sync_c0_status(CPUMIPSState *env, CPUMIPSState *cpu, int tc);
 void cpu_mips_store_status(CPUMIPSState *env, target_ulong val);
 void cpu_mips_store_cause(CPUMIPSState *env, target_ulong val);

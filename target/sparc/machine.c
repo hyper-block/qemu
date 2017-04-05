@@ -56,7 +56,7 @@ static const VMStateDescription vmstate_tlb_entry = {
 };
 #endif
 
-static int get_psr(QEMUFile *f, void *opaque, size_t size)
+static int get_psr(QEMUFile *f, void *opaque, size_t size, VMStateField *field)
 {
     SPARCCPU *cpu = opaque;
     CPUSPARCState *env = &cpu->env;
@@ -69,7 +69,8 @@ static int get_psr(QEMUFile *f, void *opaque, size_t size)
     return 0;
 }
 
-static void put_psr(QEMUFile *f, void *opaque, size_t size)
+static int put_psr(QEMUFile *f, void *opaque, size_t size, VMStateField *field,
+                   QJSON *vmdesc)
 {
     SPARCCPU *cpu = opaque;
     CPUSPARCState *env = &cpu->env;
@@ -78,6 +79,7 @@ static void put_psr(QEMUFile *f, void *opaque, size_t size)
     val = cpu_get_psr(env);
 
     qemu_put_be32(f, val);
+    return 0;
 }
 
 static const VMStateInfo vmstate_psr = {
@@ -148,8 +150,8 @@ const VMStateDescription vmstate_sparc_cpu = {
         VMSTATE_UINT64_ARRAY(env.mmubpregs, SPARCCPU, 4),
 #else
         VMSTATE_UINT64(env.lsu, SPARCCPU),
-        VMSTATE_UINT64_ARRAY(env.immuregs, SPARCCPU, 16),
-        VMSTATE_UINT64_ARRAY(env.dmmuregs, SPARCCPU, 16),
+        VMSTATE_UINT64_ARRAY(env.immu.mmuregs, SPARCCPU, 16),
+        VMSTATE_UINT64_ARRAY(env.dmmu.mmuregs, SPARCCPU, 16),
         VMSTATE_STRUCT_ARRAY(env.itlb, SPARCCPU, 64, 0,
                              vmstate_tlb_entry, SparcTLBEntry),
         VMSTATE_STRUCT_ARRAY(env.dtlb, SPARCCPU, 64, 0,
