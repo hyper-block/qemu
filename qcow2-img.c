@@ -727,6 +727,7 @@ static int img_commit(int argc, char **argv)
     CommonBlockJobCBInfo cbi;
     bool image_opts = false;
     AioContext *aio_context;
+    BlockJob *job;
 
     fmt = "qcow2";
     cache = BDRV_DEFAULT_CACHE;
@@ -849,6 +850,11 @@ static int img_commit(int argc, char **argv)
         goto done;
     }
     base_bs = blk_bs(base_blk);
+    bdrv_set_backing_hd(bs, base_bs, &local_err);
+    if (local_err) {
+        ret = -EINVAL;
+        goto done;
+    }
 
     bdrv_query_image_info(base_bs, &base_info, &local_err);
     if (local_err) {
@@ -895,6 +901,8 @@ static int img_commit(int argc, char **argv)
         bdrv_ref(bs);
     }
 
+    job = block_job_get("commit");
+    run_block_job(job, &local_err);
     run_block_job(bs->job, &local_err);
     if (local_err) {
         goto unref_backing;
