@@ -784,6 +784,7 @@ static int img_commit(int argc, char **argv)
             break;
         }
     }
+    (void)base;
 
     /* Progress is not shown in Quiet mode */
     if (quiet) {
@@ -1768,6 +1769,7 @@ static int mount(int argc, char **argv)
             break;
         }
     }
+    (void)image_opts;
 
     /* Get the filename */
     filename = (optind < argc) ? argv[optind] : NULL;
