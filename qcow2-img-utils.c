@@ -87,7 +87,10 @@ int get_snapshot_cluster_l2_offset(BlockDriverState *bs, Snapshot_cache_t *cache
         if (l1_size > 0) {
             cache->sn_l1_table_cache.table = g_malloc0(align_offset(max_l1_size * sizeof(uint64_t), 512));
             cache->sn_l1_be_table_cache.table = g_malloc0(align_offset(max_l1_size * sizeof(uint64_t), 512));
-            int ret = bdrv_pread(bs->file, l1_table_offset, cache->sn_l1_table_cache.table, l1_size * sizeof(uint64_t));
+            int ret;
+            do{
+                ret = bdrv_pread(bs->file, l1_table_offset, cache->sn_l1_table_cache.table, l1_size * sizeof(uint64_t));
+            }while(ret == -EINPROGRESS);
             if (ret < 0) {
                 error_report("bdrv_pread error ret %d, offset %ld size %ld", ret, l1_table_offset, l1_size * sizeof(uint64_t));
                 goto faild;

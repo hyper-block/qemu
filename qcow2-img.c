@@ -1157,13 +1157,87 @@ fail:
     return 1;
 }
 
+static int _bdrv_pwrite(BlockDriverState *bs, int64_t offset, char *buf, int bytes)
+{
+	struct iovec iov[1];
+	iov[0].iov_base = (void*)buf;
+	iov[0].iov_len = bytes;
+	QEMUIOVector qiov;
+	qemu_iovec_init_external(&qiov, iov, 1);
+
+	int ret = bs->drv->bdrv_co_pwritev(bs, offset, bytes, &qiov, 0);
+	if(ret < 0){
+		return ret;
+	}
+	return bytes;
+}
+
 static int bdrv_write_zeros(BlockDriverState *bs, int64_t offset, int bytes)
 {
     int ret = bs->drv->bdrv_co_pwrite_zeroes(bs, offset>>BDRV_SECTOR_BITS, bytes>>BDRV_SECTOR_BITS, BDRV_REQ_ZERO_WRITE);
     if(ret < 0){
+        if(ret == -ENOTSUP){
+            char *buf = calloc(bytes, 1);
+            ret = _bdrv_pwrite(bs, offset, buf, bytes);
+            free(buf);
+            return ret;
+        }
         return ret;
     }
     return bytes;
+}
+
+struct dump_layer_args
+{
+    int snapshot_index;
+    int parent_snapshot_index;
+    BlockDriverState *bs, *base_bs;
+    int ret;
+    bool done;
+};
+
+static void dump_layer(void *_args)
+{
+    struct dump_layer_args *args = _args;
+    Snapshot_cache_t cache, parent_cache;
+    uint64_t increament_cluster_count;
+    init_cache(&cache, args->snapshot_index);
+    init_cache(&parent_cache, args->parent_snapshot_index);
+    uint64_t total_cluster_nb = get_layer_cluster_nb(args->base_bs, args->snapshot_index);
+    BDRVQcow2State *s = args->base_bs->opaque;
+    const int data_size = sizeof(ClusterData_t) + s->cluster_size;
+    ClusterData_t *data = malloc(data_size);
+    int ret = count_increment_clusters(args->base_bs, &cache, &parent_cache, &increament_cluster_count, 0);
+    if(ret < 0){
+        error_exit("count_increment_clusters failed");
+    }
+
+    uint64_t i;
+    for(i = 0; i < total_cluster_nb; i++) {
+        bool is_cluster_0_offset;
+        ret = read_snapshot_cluster_increment(args->base_bs, &cache, &parent_cache, i, data, &is_cluster_0_offset);
+        if(ret < 0){
+            error_report("error read snapshot cluster");
+            goto fail;
+        }
+        if(ret == 0){
+            continue;
+        }
+        uint64_t off = data->cluset_index << s->cluster_bits;
+        ret = ret == 1 ? _bdrv_pwrite(args->bs, off, data->buf, s->cluster_size) :
+                         bdrv_write_zeros(args->bs, off, s->cluster_size);
+        if(ret < s->cluster_size){
+            error_report("error bdrv_pwrite ret is %d", ret);
+            goto fail;
+        }
+    }
+    args->done = true;
+    args->ret = 0;
+    return;
+fail:
+	args->done = true;
+    args->ret = 1;
+    return;
 }
 
 static int img_layer_dump(int argc, char **argv)
@@ -1282,37 +1356,19 @@ static int img_layer_dump(int argc, char **argv)
     }
     bs = blk_bs(blk);
 
-    Snapshot_cache_t cache, parent_cache;
-    uint64_t increament_cluster_count;
-    init_cache(&cache, snapshot_index);
-    init_cache(&parent_cache, parent_snapshot_index);
-    uint64_t total_cluster_nb = get_layer_cluster_nb(base_bs, snapshot_index);
-    BDRVQcow2State *s = base_bs->opaque;
-    const int data_size = sizeof(ClusterData_t) + s->cluster_size;
-    ClusterData_t *data = malloc(data_size);
-    ret = count_increment_clusters(base_bs, &cache, &parent_cache, &increament_cluster_count, 0);
-    if(ret < 0){
-        error_exit("count_increment_clusters failed");
+    struct dump_layer_args args;
+    args.base_bs = base_bs;
+    args.bs = bs;
+    args.parent_snapshot_index = parent_snapshot_index;
+    args.snapshot_index = snapshot_index;
+    args.done = false;
+    Coroutine *co = qemu_coroutine_create(dump_layer, &args);
+    qemu_coroutine_enter(co);
+    while(!args.done){
+    	main_loop_wait(false);
     }
-
-    uint64_t i;
-    for(i = 0; i < total_cluster_nb; i++) {
-        bool is_cluster_0_offset;
-        ret = read_snapshot_cluster_increment(base_bs, &cache, &parent_cache, i, data, &is_cluster_0_offset);
-        if(ret < 0){
-            error_report("error read snapshot cluster");
-            goto fail;
-        }
-        if(ret == 0){
-            continue;
-        }
-        uint64_t off = data->cluset_index << s->cluster_bits;
-        ret = ret == 1 ? bdrv_pwrite(bs->file, off, data->buf, s->cluster_size) :
-                         bdrv_write_zeros(bs, off, s->cluster_size);
-        if(ret < s->cluster_size){
-            error_report("error bdrv_pwrite ret is %d", ret);
-            goto fail;
-        }
+    if(args.ret != 0){
+        goto fail;
     }
 
     blk_unref(blk);
