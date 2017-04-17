@@ -596,7 +596,8 @@ typedef struct CommonBlockJobCBInfo {
     Error **errp;
 } CommonBlockJobCBInfo;
 
-int get_last_snapshot_uuid(char* uuid, ImageInfo *info)
+/*
+static int get_last_snapshot_uuid(char* uuid, ImageInfo *info)
 {
     if (!info->snapshots) {
         return 3;
@@ -608,6 +609,7 @@ int get_last_snapshot_uuid(char* uuid, ImageInfo *info)
     char p_uuid[PATH_MAX], commit_msg[PATH_MAX];
     return sscanf(cur->value->name, "%[^,],%[^,],%s", uuid, p_uuid, commit_msg);
 }
+*/
 
 static int64_t search_snapshot_by_name(char* uuid, int* index, char* puuid, char* msg, uint64_t* disk_size, ImageInfo *info)
 {
