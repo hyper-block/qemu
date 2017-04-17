@@ -864,11 +864,11 @@ static int img_commit(int argc, char **argv)
         goto done;
     }
 
-    int snapshotindex;
-    int64_t snapshotid = search_snapshot_by_name(layername, &snapshotindex, NULL, NULL, NULL, base_info);
+    int snapshotindex = 0;
+    int64_t snapshotid = search_snapshot_by_name(snapshot_uuid, &snapshotindex, NULL, NULL, NULL, base_info);
     if(snapshotid > 0){
         error_setg_errno(&local_err, -1, "error backing file already have one commit named %s "
-                         "can't commit", layername);
+                         "can't commit %ld %d", snapshot_uuid, snapshotid, snapshotindex);
         ret = -1;
         goto done;
     }
