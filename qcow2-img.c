@@ -1341,7 +1341,7 @@ static int img_layer_dump(int argc, char **argv)
         }
     }
 
-    char *backing_str = generate_encoded_backingfile(template_filename, layer_uuid);
+    char *backing_str = generate_encoded_backingfile(template_filename, parent_snapshot_uuid);
     int ret = _img_create(filename, "qcow2", backing_str, NULL, options, snapshot_disk_size, 0,
                           &local_err, quiet);
    if(ret != 0){
