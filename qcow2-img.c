@@ -596,7 +596,7 @@ typedef struct CommonBlockJobCBInfo {
     Error **errp;
 } CommonBlockJobCBInfo;
 
-static int get_last_snapshot_uuid(char* uuid, ImageInfo *info)
+int get_last_snapshot_uuid(char* uuid, ImageInfo *info)
 {
     if (!info->snapshots) {
         return 3;
@@ -862,16 +862,12 @@ static int img_commit(int argc, char **argv)
         goto done;
     }
 
-    char last_snapshot_uuid[PATH_MAX] = "";
-    ret = get_last_snapshot_uuid(last_snapshot_uuid, base_info);
-    if (ret < 1) {
-        error_setg_errno(&local_err, -1, "error get last from backing file, can't commit");
-        goto done;
-    }
-
-    if (strcmp(layername, last_snapshot_uuid) != 0) {
-        error_setg_errno(&local_err, -1, "error backing file is not the last uuid "
-                         "(%s) (%s) , can't commit", last_snapshot_uuid, layername);
+    int snapshotindex;
+    int64_t snapshotid = search_snapshot_by_name(layername, &snapshotindex, NULL, NULL, NULL, base_info);
+    if(snapshotid > 0){
+        error_setg_errno(&local_err, -1, "error backing file already have one commit named %s "
+                         "can't commit", layername);
+        ret = -1;
         goto done;
     }
 
