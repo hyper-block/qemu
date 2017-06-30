@@ -102,6 +102,7 @@ static void QEMU_NORETURN help(void)
             "resize filename [+ | -]size\n"
             "info filename\n"
             "commit [-t <cache>] [-s <snapshot>] -m <commit-message> filename\n"
+    		"commit2 [-t <cache>] [-s <snapshot>] -m <commit-message> filename\n"
             "layerdump -t <template file> -l <layer UUID> filename\n"
             "layerremove -l <layer UUID> filename\n"
             "mount -c </dev/nbdx> filename\n"
@@ -716,6 +717,23 @@ static void run_block_job(BlockJob *job, Error **errp)
     qemu_progress_print(100.f, 0);
 }
 
+struct Qcow2TemplateArgs
+{
+	BlockDriverState *bs;
+	BlockDriverState *base_bs;
+	bool trim;
+	bool copy_backingfile;
+	int ret;
+	bool done;
+};
+
+static void qcow2_template_clone_wrap(void *_args)
+{
+	struct Qcow2TemplateArgs *args = _args;
+	args->ret = qcow2_template_clone(args->bs, args->base_bs, args->trim, args->copy_backingfile, NULL, NULL);
+	args->done = true;
+}
+
 static int img_commit2(int argc, char **argv)
 {
     int c, ret, flags;
@@ -787,6 +805,7 @@ static int img_commit2(int argc, char **argv)
 
     (void)base;
     (void)progress;
+    (void)drop;
 
     /* Progress is not shown in Quiet mode */
     if (quiet) {
@@ -845,7 +864,7 @@ static int img_commit2(int argc, char **argv)
 		goto done;
 	}
 
-	char *new_backing_string = generate_encoded_backingfile(tmplate_name, layername);
+	char *new_backing_string = generate_encoded_backingfile(tmplate_name, snapshot_uuid);
 
 	base_blk = img_open(image_opts, tmplate_name, fmt, flags, writethrough, quiet);
 	if (!base_blk) {
@@ -889,8 +908,18 @@ static int img_commit2(int argc, char **argv)
 		goto done;
 	}
 
-	ret = qcow2_template_clone(bs, base_bs, true, false, NULL, NULL);
-	if(ret != 0){
+	struct Qcow2TemplateArgs args;
+	memset(&args, 0, sizeof(args));
+	args.bs = bs;
+	args.base_bs = base_bs;
+	args.trim = true;
+	args.copy_backingfile = false;
+	Coroutine *co = qemu_coroutine_create(qcow2_template_clone_wrap, &args);
+	qemu_coroutine_enter(co);
+	while(!args.done){
+		main_loop_wait(false);
+	}
+	if(args.ret != 0){
 		error_setg_errno(&local_err, -1, "error qcow2_template_clone ret %d", ret);
 		goto done;
 	}
@@ -916,10 +945,6 @@ static int img_commit2(int argc, char **argv)
 	if(ret != 0){
 		error_setg_errno(&local_err, -1, "error change backing file %d", ret);
 		goto done;
-	}
-
-	if (!drop) {
-		bdrv_unref(bs);
 	}
 
 done:

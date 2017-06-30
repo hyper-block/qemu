@@ -224,7 +224,7 @@ static int is_backing_file_allocated(BlockDriverState *_backing_bs, int64_t clus
         if(ret < 0){
             return ret;
         }
-        backing_bs = backing_bs->backing->bs;
+        backing_bs = backing_bs->backing? backing_bs->backing->bs : NULL;
     }
     return 0;
 }
@@ -562,7 +562,7 @@ static int allocate_cluster(BlockDriverState *bs, Qcow2Cache *l2_table_cache, ui
 			error_report("error qcow2_update_cluster_refcount ret %d", ref);
 			return ref;
 		}
-		error_report("cluster index %ld reference-set to %d", cluster_offset >> s->cluster_bits, ref);
+		// error_report("cluster index %ld reference-set to %d", cluster_offset >> s->cluster_bits, ref);
 		goto store_offset;
 	}
 
@@ -651,7 +651,7 @@ static int mebs_qcow2_free_clusters(BlockDriverState *bs,
         fprintf(stderr, "qcow2_free_clusters failed: %s\n", strerror(-ret));
         /* TODO Remember the clusters to free them later and avoid leaking */
     }
-    error_report("cluster index %ld reference-set to %d", cluster_index, ret);
+    // error_report("cluster index %ld reference-set to %d", cluster_index, ret);
     return ret;
 }
 
