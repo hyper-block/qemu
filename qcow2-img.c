@@ -716,6 +716,225 @@ static void run_block_job(BlockJob *job, Error **errp)
     qemu_progress_print(100.f, 0);
 }
 
+static int img_commit2(int argc, char **argv)
+{
+    int c, ret, flags;
+    const char *filename, *fmt, *cache, *base;
+    BlockBackend *blk, *base_blk = NULL;
+    BlockDriverState *bs, *base_bs;
+    bool progress = false, quiet = false, drop = false;
+    bool writethrough;
+    char *commit_msg = NULL, *snapshot_uuid = NULL;
+    Error *local_err = NULL;
+    bool image_opts = false;
+
+    fmt = "qcow2";
+    cache = BDRV_DEFAULT_CACHE;
+    base = NULL;
+    for(;;) {
+        static const struct option long_options[] = {
+            {"help", no_argument, 0, 'h'},
+            {"object", required_argument, 0, OPTION_OBJECT},
+            {"image-opts", no_argument, 0, OPTION_IMAGE_OPTS},
+            {0, 0, 0, 0}
+        };
+        c = getopt_long(argc, argv, "ht:b:dpqm:s:",
+                        long_options, NULL);
+        if (c == -1) {
+            break;
+        }
+        switch(c) {
+        case '?':
+        case 'h':
+            help();
+            break;
+        case 't':
+            cache = optarg;
+            break;
+        case 'b':
+            base = optarg;
+            /* -b implies -d */
+            drop = true;
+            break;
+        case 'd':
+            drop = true;
+            break;
+        case 'p':
+            progress = true;
+            break;
+        case 'q':
+            quiet = true;
+            break;
+        case 's':
+            snapshot_uuid = optarg;
+            break;
+        case 'm':
+            commit_msg = optarg;
+            break;
+        case OPTION_OBJECT: {
+            QemuOpts *opts;
+            opts = qemu_opts_parse_noisily(&qemu_object_opts,
+                                           optarg, true);
+            if (!opts) {
+                return 1;
+            }
+        }   break;
+        case OPTION_IMAGE_OPTS:
+            image_opts = true;
+            break;
+        }
+    }
+
+    (void)base;
+    (void)progress;
+
+    /* Progress is not shown in Quiet mode */
+    if (quiet) {
+        progress = false;
+    }
+
+    if (optind != argc - 1) {
+        error_exit("Expecting one image file name");
+    }
+    filename = argv[optind++];
+
+    if (qemu_opts_foreach(&qemu_object_opts,
+                          user_creatable_add_opts_foreach,
+                          NULL, NULL)) {
+        return 1;
+    }
+
+    flags = BDRV_O_RDWR | BDRV_O_UNMAP | BDRV_O_NO_BACKING;
+    ret = bdrv_parse_cache_mode(cache, &flags, &writethrough);
+    if (ret < 0) {
+        error_report("Invalid cache option: %s", cache);
+        return 1;
+    }
+
+    if (commit_msg == NULL) {
+        error_report("commit_msg can't be none");
+        return 1;
+    }
+
+    if (snapshot_uuid == NULL) {
+        error_report("snapshot_uuid can't be none");
+        return 1;
+    }
+
+    blk = img_open(image_opts, filename, fmt, flags, writethrough, quiet);
+	if (!blk) {
+		return 1;
+	}
+	bs = blk_bs(blk);
+	ImageInfo *info, *base_info;
+	bdrv_query_image_info(bs, &info, &local_err);
+	if (local_err) {
+		error_report_err(local_err);
+		goto done;
+	}
+
+	if (!info->has_backing_filename) {
+		error_setg_errno(&local_err, -1, "No backing file found, can't commit");
+		goto done;
+	}
+
+	char tmplate_name[PATH_MAX] = "", layername[PATH_MAX] = "";
+	ret = get_encoded_backingfile(info->backing_filename, tmplate_name, layername);
+	if (ret != 2 && ret != 1) {
+		error_setg_errno(&local_err, -1, "error get get_encoded_backingfile, can't commit");
+		goto done;
+	}
+
+	char *new_backing_string = generate_encoded_backingfile(tmplate_name, layername);
+
+	base_blk = img_open(image_opts, tmplate_name, fmt, flags, writethrough, quiet);
+	if (!base_blk) {
+		error_setg_errno(&local_err, -1, "error open backing file %s, can't commit", tmplate_name);
+		goto done;
+	}
+	base_bs = blk_bs(base_blk);
+	bdrv_set_backing_hd(bs, base_bs, &local_err);
+	if (local_err) {
+		ret = -EINVAL;
+		goto done;
+	}
+
+	bdrv_query_image_info(base_bs, &base_info, &local_err);
+	if (local_err) {
+		error_setg_errno(&local_err, -1, "error get image info from backing file, can't commit");
+		goto done;
+	}
+
+	int snapshotindex = 0;
+	int64_t snapshotid = search_snapshot_by_name(snapshot_uuid, &snapshotindex, NULL, NULL, NULL, base_info);
+	if(snapshotid > 0){
+		error_setg_errno(&local_err, -1, "error backing file already have one commit named %s "
+						 "can't commit %ld %d", snapshot_uuid, snapshotid, snapshotindex);
+		ret = -1;
+		goto done;
+	}
+
+	snapshotid = search_snapshot_by_name(layername, &snapshotindex, NULL, NULL, NULL, base_info);
+	if(snapshotid < 0){
+		error_setg_errno(&local_err, -1, "error did not find snapshot %s in backing file %s", layername, tmplate_name);
+		ret = -1;
+		goto done;
+	}
+	char str_snapshotid[32];
+	sprintf(str_snapshotid, "%ld", snapshotid);
+	ret = bdrv_snapshot_goto(base_bs, str_snapshotid);
+	if(ret < 0){
+		error_setg_errno(&local_err, -1, "error goto snapshot %ld", snapshotid);
+		ret = -1;
+		goto done;
+	}
+
+	ret = qcow2_template_clone(bs, base_bs, true, false, NULL, NULL);
+	if(ret != 0){
+		error_setg_errno(&local_err, -1, "error qcow2_template_clone ret %d", ret);
+		goto done;
+	}
+
+	char enforced_snapshot_name[PATH_MAX*2];
+	generate_enforced_snapshotname(enforced_snapshot_name, layername, snapshot_uuid, commit_msg);
+	QEMUSnapshotInfo sn;
+	qemu_timeval tv;
+	memset(&sn, 0, sizeof(sn));
+	pstrcpy(sn.name, sizeof(sn.name), enforced_snapshot_name);
+	qemu_gettimeofday(&tv);
+	sn.date_sec = tv.tv_sec;
+	sn.date_nsec = tv.tv_usec * 1000;
+
+	ret = bdrv_snapshot_create(base_bs, &sn);
+	if (ret) {
+		error_setg_errno(&local_err, -1, "Could not create snapshot '%s': %d (%s)",
+					enforced_snapshot_name, ret, strerror(-ret));
+		goto done;
+	}
+
+	ret = bdrv_change_backing_file(bs, new_backing_string, "qcow2");
+	if(ret != 0){
+		error_setg_errno(&local_err, -1, "error change backing file %d", ret);
+		goto done;
+	}
+
+	if (!drop) {
+		bdrv_unref(bs);
+	}
+
+done:
+	if (local_err) {
+		error_report_err(local_err);
+		return 1;
+	}
+
+	blk_unref(blk);
+	blk_unref(base_blk);
+
+	qprintf(quiet, "Image committed.\n");
+	return 0;
+}
+
 static int img_commit(int argc, char **argv)
 {
     int c, ret, flags;
@@ -2037,6 +2256,7 @@ static const img_cmd_t img_cmds[] = {
     DEF("resize", img_resize, "resize filename [+ | -]size")
     DEF("info", img_info, "info filename")
     DEF("commit", img_commit, "commit [-t <cache>] [-s <snapshot>] -m <commit-message> filename")
+	DEF("commit2", img_commit2, "commit2 [-t <cache>] [-s <snapshot>] -m <commit-message> filename")
     DEF("layerdump", img_layer_dump, "layerdump -t <template file> -l <layer UUID> filename")
     DEF("layerremove", img_layer_remove, "layerremove -l <layer UUID> filename")
     DEF("mount", mount, "mount -c </dev/nbdx> filename")
