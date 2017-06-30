@@ -103,7 +103,7 @@ static void QEMU_NORETURN help(void)
             "info filename\n"
             "commit [-t <cache>] [-s <snapshot>] -m <commit-message> filename\n"
     		"commit2 [-t <cache>] [-s <snapshot>] -m <commit-message> filename\n"
-            "layerdump -t <template file> -l <layer UUID> filename\n"
+            "layerdump -t <template file> -l <layer UUID>  -f <format output, 0/1> filename\n"
             "layerremove -l <layer UUID> filename\n"
             "mount -c </dev/nbdx> filename\n"
             ;
@@ -1436,6 +1436,7 @@ struct dump_layer_args
     int snapshot_index;
     int parent_snapshot_index;
     BlockDriverState *bs, *base_bs;
+    int output_format;
     int ret;
     bool done;
 };
@@ -1498,13 +1499,14 @@ static int img_layer_dump(int argc, char **argv)
     Error *local_err = NULL;
     bool writethrough = false;
     char *layer_uuid = NULL;
+    int output_format = 0;
     for(;;) {
             static const struct option long_options[] = {
                 {"help", no_argument, 0, 'h'},
                 {"object", required_argument, 0, OPTION_OBJECT},
                 {0, 0, 0, 0}
             };
-            c = getopt_long(argc, argv, "t:l:h",
+            c = getopt_long(argc, argv, "t:l:hf:",
                             long_options, NULL);
             if (c == -1) {
                 break;
@@ -1520,6 +1522,9 @@ static int img_layer_dump(int argc, char **argv)
             case 'l':
                 layer_uuid = optarg;
                 break;
+            case 'f':
+            	output_format = atoi(optarg);
+            	break;
             case OPTION_IMAGE_OPTS:
                 image_opts = true;
                 break;
@@ -1606,6 +1611,7 @@ static int img_layer_dump(int argc, char **argv)
     args.parent_snapshot_index = parent_snapshot_index;
     args.snapshot_index = snapshot_index;
     args.done = false;
+    args.output_format = output_format;
     Coroutine *co = qemu_coroutine_create(dump_layer, &args);
     qemu_coroutine_enter(co);
     while(!args.done){
@@ -2282,7 +2288,7 @@ static const img_cmd_t img_cmds[] = {
     DEF("info", img_info, "info filename")
     DEF("commit", img_commit, "commit [-t <cache>] [-s <snapshot>] -m <commit-message> filename")
 	DEF("commit2", img_commit2, "commit2 [-t <cache>] [-s <snapshot>] -m <commit-message> filename")
-    DEF("layerdump", img_layer_dump, "layerdump -t <template file> -l <layer UUID> filename")
+    DEF("layerdump", img_layer_dump, "layerdump -t <template file> -l <layer UUID> -f <format output, 0/1> filename")
     DEF("layerremove", img_layer_remove, "layerremove -l <layer UUID> filename")
     DEF("mount", mount, "mount -c </dev/nbdx> filename")
 #undef DEF
