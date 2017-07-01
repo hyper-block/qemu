@@ -1431,10 +1431,97 @@ static int bdrv_write_zeros(BlockDriverState *bs, int64_t offset, int bytes)
     return bytes;
 }
 
+
+#define FORMAT_OUTPUT_QCOW2 (0)
+#define FORMAT_OUTPUT_HYPERLAYER (1)
+
+#define COMMIT_ID "commit_id"
+#define PARRENT_ID "parrent_id"
+#define COMMIT_MSG "commit_msg"
+#define VIRTUAL_SIZE "virtual_size"
+#define BACKING_FILE "backing_filename"
+#define ACTUAL_SIZE "actual_size"
+
+#define SECTOR_SIZE 512
+
+struct KV {
+	char* key;
+	char* val;
+};
+
+static void add_kv(struct KV *kvs, const char *k, const char *v)
+{
+	int i = 0;
+	while(kvs[i].key){
+		i++;
+	}
+	kvs[i].key = strdup(k);
+	kvs[i].val = strdup(v);
+}
+
+static int write_hy_head(int fd)
+{
+	const char* str = "HYPERLAYER/1.0\n";
+	int ret = write(fd, str, strlen(str));
+	if(ret != strlen(str)){
+		error_report("error write head");
+		return -1;
+	}
+	return 0;
+}
+
+static int write_hy_kvs(int fd, struct KV* kvs)
+{
+	int i = 0;
+	while(kvs[i].key){
+		char line[4096];
+		sprintf(line, "%s: %s\n", kvs[i].key, kvs[i].val);
+		int ret = write(fd, line, strlen(line));
+		if(ret != strlen(line)){
+			error_report("error write kv %s %s\n", kvs[i].key, kvs[i].val);
+			return -1;
+		}
+		i++;
+	}
+	int ret = write(fd, "\n", 1);
+	if(ret != 1){
+		error_report("error write new line\n");
+		return -1;
+	}
+	return 0;
+}
+
+static int write_hy_data(int fd, char* buf, uint64_t offset, uint32_t len)
+{
+	char line[4096];
+	sprintf(line, "W %lx %x\n", offset / SECTOR_SIZE, len / SECTOR_SIZE);
+	int ret = write(fd, line, strlen(line));
+	if(ret != strlen(line)){
+		error_report("error write data desc\n");
+		return -1;
+	}
+	ret = write(fd, buf, len);
+	if(ret != len){
+		error_report("error write data\n");
+		return -1;
+	}
+	return 0;
+}
+
+static int write_hy_zero_data(int fd, uint64_t offset, uint32_t len)
+{
+	char* buf = calloc(len, 1);
+	int ret = write_hy_data(fd, buf, offset, len);
+	free(buf);
+	return ret;
+}
+
 struct dump_layer_args
 {
     int snapshot_index;
     int parent_snapshot_index;
+    int fd;
+    struct KV *kvs;
     BlockDriverState *bs, *base_bs;
     int output_format;
     int ret;
@@ -1445,7 +1532,7 @@ static void dump_layer(void *_args)
 {
     struct dump_layer_args *args = _args;
     Snapshot_cache_t cache, parent_cache;
-    uint64_t increament_cluster_count;
+    uint64_t increament_cluster_count = 0;
     init_cache(&cache, args->snapshot_index);
     init_cache(&parent_cache, args->parent_snapshot_index);
     uint64_t total_cluster_nb = get_layer_cluster_nb(args->base_bs, args->snapshot_index);
@@ -1456,6 +1543,11 @@ static void dump_layer(void *_args)
     if(ret < 0){
         error_exit("count_increment_clusters failed");
     }
+
+    char actual_size[32];
+    sprintf(actual_size, "%ld", increament_cluster_count * s->cluster_size);
+    add_kv(args->kvs, ACTUAL_SIZE, actual_size);
+    write_hy_kvs(args->fd, args->kvs);
 
     uint64_t i;
     for(i = 0; i < total_cluster_nb; i++) {
@@ -1469,12 +1561,17 @@ static void dump_layer(void *_args)
             continue;
         }
         uint64_t off = data->cluset_index << s->cluster_bits;
-        ret = ret == 1 ? _bdrv_pwrite(args->bs, off, data->buf, s->cluster_size) :
-                         bdrv_write_zeros(args->bs, off, s->cluster_size);
-        if(ret < s->cluster_size){
-            error_report("error bdrv_pwrite ret is %d", ret);
-            goto fail;
+        if(args->output_format == FORMAT_OUTPUT_QCOW2){
+			ret = ret == 1 ? _bdrv_pwrite(args->bs, off, data->buf, s->cluster_size) :
+							 bdrv_write_zeros(args->bs, off, s->cluster_size);
+        }else if(args->output_format == FORMAT_OUTPUT_HYPERLAYER){
+        	ret = ret == 1 ? write_hy_data(args->fd, data->buf, off, s->cluster_size) :
+        					 write_hy_zero_data(args->fd, off, s->cluster_size);
         }
+        if(ret < s->cluster_size){
+			error_report("error bdrv_pwrite ret is %d", ret);
+			goto fail;
+		}
     }
     args->done = true;
     args->ret = 0;
@@ -1499,7 +1596,9 @@ static int img_layer_dump(int argc, char **argv)
     Error *local_err = NULL;
     bool writethrough = false;
     char *layer_uuid = NULL;
-    int output_format = 0;
+    int output_format = FORMAT_OUTPUT_QCOW2;
+    struct KV kvs[100];
+    memset(kvs, 0, sizeof(kvs));
     for(;;) {
             static const struct option long_options[] = {
                 {"help", no_argument, 0, 'h'},
@@ -1577,9 +1676,10 @@ static int img_layer_dump(int argc, char **argv)
     }
 
     char parent_snapshot_uuid[PATH_MAX] = "";
+    char commit_msg[PATH_MAX] = "";
     int snapshot_index, parent_snapshot_index = -1;
     uint64_t snapshot_disk_size;
-    int64_t sn_id = search_snapshot_by_name(layer_uuid, &snapshot_index, parent_snapshot_uuid, NULL, &snapshot_disk_size, base_info);
+    int64_t sn_id = search_snapshot_by_name(layer_uuid, &snapshot_index, parent_snapshot_uuid, commit_msg, &snapshot_disk_size, base_info);
     if(sn_id < 0){
         error_exit("search_snapshot %s failed", layer_uuid);
     }
@@ -1591,19 +1691,42 @@ static int img_layer_dump(int argc, char **argv)
     }
 
     char *backing_str = generate_encoded_backingfile(template_filename, parent_snapshot_uuid);
-    int ret = _img_create(filename, "qcow2", backing_str, NULL, options, snapshot_disk_size, 0,
+    int ret;
+    int fd = -1;
+    if(output_format == FORMAT_OUTPUT_QCOW2){
+    	ret = _img_create(filename, "qcow2", backing_str, NULL, options, snapshot_disk_size, 0,
                           &local_err, quiet);
-   if(ret != 0){
-       error_report_err(local_err);
-       goto fail;
-   }
+	   if(ret != 0){
+		   error_report_err(local_err);
+		   goto fail;
+	   }
 
-    blk = img_open(image_opts, filename, fmt, BDRV_O_NO_BACKING | BDRV_O_RDWR, writethrough, quiet);
-    if (!blk) {
-        error_report("error open img: %s", filename);
-        return 1;
+		blk = img_open(image_opts, filename, fmt, BDRV_O_NO_BACKING | BDRV_O_RDWR, writethrough, quiet);
+		if (!blk) {
+			error_report("error open img: %s", filename);
+			return 1;
+		}
+		bs = blk_bs(blk);
+    }else if(output_format == FORMAT_OUTPUT_HYPERLAYER){
+    	fd = open(filename, O_RDWR|O_EXCL|O_CREAT);
+    	if(fd < 0){
+    		error_report("error open filename %s", filename);
+    		return 1;
+    	}
+    	ret = write_hy_head(fd);
+    	if(ret != 0){
+    		error_report("error write hy head");
+    		return 1;
+    	}
+    	uint64_t virtual_size = base_bs->total_sectors * 512;
+    	char str_virtual_size[32];
+    	sprintf(str_virtual_size, "%ld", virtual_size);
+    	add_kv(kvs, COMMIT_ID, layer_uuid);
+    	add_kv(kvs, PARRENT_ID, parent_snapshot_uuid);
+    	add_kv(kvs, COMMIT_MSG, commit_msg);
+    	add_kv(kvs, VIRTUAL_SIZE, str_virtual_size);
+    	add_kv(kvs, BACKING_FILE, template_filename);
     }
-    bs = blk_bs(blk);
 
     struct dump_layer_args args;
     args.base_bs = base_bs;
@@ -1611,6 +1734,8 @@ static int img_layer_dump(int argc, char **argv)
     args.parent_snapshot_index = parent_snapshot_index;
     args.snapshot_index = snapshot_index;
     args.done = false;
+    args.kvs = kvs;
+    args.fd = fd;
     args.output_format = output_format;
     Coroutine *co = qemu_coroutine_create(dump_layer, &args);
     qemu_coroutine_enter(co);
