@@ -1117,6 +1117,21 @@ static int img_commit(int argc, char **argv)
         goto done;
     }
 
+    snapshotid = search_snapshot_by_name(layername, &snapshotindex, NULL, NULL, NULL, base_info);
+	if(snapshotid < 0){
+		error_setg_errno(&local_err, -1, "error did not find snapshot %s in backing file %s", layername, tmplate_name);
+		ret = -1;
+		goto done;
+	}
+	char str_snapshotid[32];
+	sprintf(str_snapshotid, "%ld", snapshotid);
+	ret = bdrv_snapshot_goto(base_bs, str_snapshotid);
+	if(ret < 0){
+		error_setg_errno(&local_err, -1, "error goto snapshot %ld", snapshotid);
+		ret = -1;
+		goto done;
+	}
+
     cbi = (CommonBlockJobCBInfo){
         .errp = &local_err,
         .bs   = bs,
@@ -1745,6 +1760,140 @@ static int img_layer_dump(int argc, char **argv)
     if(args.ret != 0){
         goto fail;
     }
+
+    blk_unref(blk);
+    blk_unref(base_blk);
+
+    return 0;
+fail:
+    g_free(options);
+    return 1;
+}
+
+static int img_layer_patch(int argc, char **argv)
+{
+    int c;
+    char *options = NULL;
+    BlockDriverState *bs, *base_bs;
+    BlockBackend *blk, *base_blk = NULL;
+    const char *filename = NULL;
+    const char *fmt = "qcow2";
+    char *template_filename = NULL;
+    bool quiet = false;
+    bool image_opts = false;
+    Error *local_err = NULL;
+    bool writethrough = false;
+    int input_format = FORMAT_OUTPUT_QCOW2;
+    struct KV kvs[100];
+    memset(kvs, 0, sizeof(kvs));
+    for(;;) {
+            static const struct option long_options[] = {
+                {"help", no_argument, 0, 'h'},
+                {"object", required_argument, 0, OPTION_OBJECT},
+                {0, 0, 0, 0}
+            };
+            c = getopt_long(argc, argv, "t:l:hf:",
+                            long_options, NULL);
+            if (c == -1) {
+                break;
+            }
+            switch(c) {
+            case '?':
+            case 'h':
+                help();
+                break;
+            case 't':
+                template_filename = optarg;
+                break;
+            case 'f':
+            	input_format = atoi(optarg);
+            	break;
+            case OPTION_IMAGE_OPTS:
+                image_opts = true;
+                break;
+            }
+    }
+
+    /* Get the filename */
+    filename = (optind < argc) ? argv[optind] : NULL;
+    if (options && has_help_option(options)) {
+        g_free(options);
+        return -1;
+    }
+
+    if (optind >= argc) {
+        error_exit("Expecting image file name");
+    }
+    optind++;
+
+    if (qemu_opts_foreach(&qemu_object_opts,
+                              user_creatable_add_opts_foreach,
+                          NULL, NULL)) {
+        goto fail;
+    }
+
+    if (template_filename == NULL) {
+        error_report("template_filename can't be none");
+        return 1;
+    }
+
+    if (optind != argc) {
+        error_exit("Unexpected argument: %s", argv[optind]);
+    }
+
+    base_blk = img_open(image_opts, template_filename, fmt, BDRV_O_RDWR, writethrough, quiet);
+	if (!base_blk) {
+		error_report("error open img: %s", template_filename);
+		return 1;
+	}
+	base_bs = blk_bs(base_blk);
+	ImageInfo *base_info;
+	bdrv_query_image_info(base_bs, &base_info, &local_err);
+	if (local_err) {
+		error_report_err(local_err);
+		goto fail;
+	}
+
+	blk = img_open(image_opts, filename, fmt, BDRV_O_RDWR, writethrough, quiet);
+	if (!blk){
+		error_report("error open img: %s", filename);
+		return 1;
+	}
+	bs = blk_bs(blk);
+	ImageInfo *info;
+	bdrv_query_image_info(bs, &info, &local_err);
+	if (local_err) {
+		error_report_err(local_err);
+		goto fail;
+	}
+
+	if (!info->has_backing_filename) {
+		error_report("No backing file found, can't commit");
+		return -1;
+	}
+
+	char tmplate_name[PATH_MAX] = "", layername[PATH_MAX] = "";
+	int ret = get_encoded_backingfile(info->backing_filename, tmplate_name, layername);
+	if (ret != 2 && ret != 1) {
+		error_report("error get get_encoded_backingfile, can't commit");
+		return -1;
+	}
+
+	int snapshotindex = 0;
+	int64_t snapshotid = search_snapshot_by_name(layername, &snapshotindex, NULL, NULL, NULL, base_info);
+	if(snapshotid < 0){
+		error_setg_errno(&local_err, -1, "error did not find snapshot %s in backing file %s", layername, tmplate_name);
+		return -1;
+	}
+	char str_snapshotid[32];
+	sprintf(str_snapshotid, "%ld", snapshotid);
+	ret = bdrv_snapshot_goto(base_bs, str_snapshotid);
+	if(ret < 0){
+		error_setg_errno(&local_err, -1, "error goto snapshot %ld", snapshotid);
+		return -1;
+	}
+
+
 
     blk_unref(blk);
     blk_unref(base_blk);
