@@ -1861,7 +1861,7 @@ get:
 	*len *= SECTOR_SIZE;
 	*offset *= SECTOR_SIZE;
 	*buf = malloc(*len);
-	ret = fread(buf, 1, *len, fd);
+	ret = fread(*buf, 1, *len, fd);
 	if(ret != *len){
 		error_report("error read %m");
 		return -1;
@@ -1918,6 +1918,8 @@ static void patch_layer(void *_args)
     			error_report("error bdrv_pwrite ret is %d offset %ld len %d, bs size %ld", ret, offset, len, args->base_bs->total_sectors * 512);
     			goto fail;
     		}
+    		free(buf);
+    		buf = NULL;
     	}
     }
     args->done = true;
