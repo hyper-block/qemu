@@ -1837,12 +1837,12 @@ static int get_hyperlayer_kvs(struct KV *kvs, FILE* fd)
 	return 0;
 }
 
-static int get_hyper_layer_data(FILE* fd, uint64_t *offset, uint32_t *len, char* buf)
+static int get_hyper_layer_data(FILE* fd, uint64_t *offset, uint32_t *len, char** buf)
 {
 	char desc[4096];
 	char *buf1 = NULL;
 get:
-	buf1 = fgets(buf, sizeof(desc), fd);
+	buf1 = fgets(desc, sizeof(desc), fd);
 	if(buf1 != desc){
 		if(feof(fd)){
 			return 0;
@@ -1858,6 +1858,7 @@ get:
 		error_report("error parse offset and len, %s", desc);
 		return -1;
 	}
+	*buf = malloc(*len);
 	ret = fread(buf, 1, *len, fd);
 	if(ret != *len){
 		error_report("error read %m");
@@ -1869,17 +1870,16 @@ get:
 static void patch_layer(void *_args)
 {
     struct patch_layer_args *args = _args;
-    Snapshot_cache_t cache, parent_cache;
     int ret = 0;
-    init_cache(&cache, SNAPSHOT_MAX_INDEX);
-    init_cache(&parent_cache, -1);
-    uint64_t total_cluster_nb = get_layer_cluster_nb(args->bs, SNAPSHOT_MAX_INDEX);
-    BDRVQcow2State *s = args->bs->opaque;
-    const int data_size = sizeof(ClusterData_t) + s->cluster_size;
-    ClusterData_t *data = malloc(data_size);
-
     uint64_t i;
     if(args->input_format == FORMAT_OUTPUT_QCOW2){
+        Snapshot_cache_t cache, parent_cache;
+        init_cache(&cache, SNAPSHOT_MAX_INDEX);
+		init_cache(&parent_cache, -1);
+		uint64_t total_cluster_nb = get_layer_cluster_nb(args->bs, SNAPSHOT_MAX_INDEX);
+		BDRVQcow2State *s = args->bs->opaque;
+		const int data_size = sizeof(ClusterData_t) + s->cluster_size;
+		ClusterData_t *data = malloc(data_size);
 		for(i = 0; i < total_cluster_nb; i++) {
 			bool is_cluster_0_offset;
 			ret = read_snapshot_cluster_increment(args->bs, &cache, &parent_cache, i, data, &is_cluster_0_offset);
@@ -1902,7 +1902,8 @@ static void patch_layer(void *_args)
     	while(1){
     		uint64_t offset;
     		uint32_t len;
-    		ret = get_hyper_layer_data(args->fd, &offset, &len, data->buf);
+    		char *buf = NULL;
+    		ret = get_hyper_layer_data(args->fd, &offset, &len, &buf);
     		if(ret < 0){
     			error_report("error get_hyper_layer_data");
     			goto fail;
@@ -1910,7 +1911,7 @@ static void patch_layer(void *_args)
     		if(ret == 0){
     			break;
     		}
-    		ret = _bdrv_pwrite(args->base_bs, offset, data->buf, len);
+    		ret = _bdrv_pwrite(args->base_bs, offset, buf, len);
     		if(ret != len){
     			error_report("error bdrv_pwrite ret is %d", ret);
     			goto fail;
