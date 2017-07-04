@@ -421,13 +421,19 @@ static int _bdrv_pwrite(BlockDriverState *bs, int64_t offset, char *buf, int byt
 	return bytes;
 }
 
-static int bdrv_write_zeros(BlockDriverState *bs, int64_t offset, int bytes)
+int bdrv_write_zeros(BlockDriverState *bs, int64_t offset, int bytes)
 {
-	int ret = bs->drv->bdrv_co_pwrite_zeroes(bs, offset>>BDRV_SECTOR_BITS, bytes>>BDRV_SECTOR_BITS, BDRV_REQ_ZERO_WRITE);
-	if(ret < 0){
-		return ret;
-	}
-	return bytes;
+    int ret = bs->drv->bdrv_co_pwrite_zeroes(bs, offset>>BDRV_SECTOR_BITS, bytes>>BDRV_SECTOR_BITS, BDRV_REQ_ZERO_WRITE);
+    if(ret < 0){
+        if(ret == -ENOTSUP){
+            char *buf = calloc(bytes, 1);
+            ret = _bdrv_pwrite(bs, offset, buf, bytes);
+            free(buf);
+            return ret;
+        }
+        return ret;
+    }
+    return bytes;
 }
 
 static int allocate_l2(BlockDriverState *bs, uint64_t *l1_table, uint64_t *l1_be_table, int l1_index, Qcow2Cache *l2_table_cache, uint64_t *out_l2_offset, void** l2_table)
@@ -918,7 +924,7 @@ int qcow2_template_clone(BlockDriverState *bs, BlockDriverState *clone_des_bs, b
 			if(r == 2){
 				ret = bdrv_write_zeros(clone_des_bs, cluster_index<<s->cluster_bits, s->cluster_size);
 				if(ret < 0){
-					error_report("error bdrv_write_zeros is %ld, ret %d", cluster_index, ret);
+					error_report("error bdrv_write_zeros is %ld, write size %d, ret %d", cluster_index, s->cluster_size, ret);
 					goto out1;
 				}
 			}else{ // r == 1

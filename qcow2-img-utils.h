@@ -56,6 +56,7 @@ static inline void* zalloc(size_t size)
 #define SIZE_TO_CLUSTER_NB(bs, size) ((size) >> ((BDRVQcow2State *)bs->opaque)->cluster_bits)
 
 typedef void (*out_percent_wrap)(void* data);
+int bdrv_write_zeros(BlockDriverState *bs, int64_t offset, int bytes);
 int get_snapshot_cluster_l2_offset(BlockDriverState *bs, Snapshot_cache_t *cache, int64_t cluster_index, uint64_t* ret_offset);
 int get_snapshot_cluster_offset(BlockDriverState *bs, Snapshot_cache_t *cache, int64_t cluster_index, uint64_t *ret_offset);
 int get_snapshot_cluster_offset_with_zero_flag(BlockDriverState *bs, Snapshot_cache_t *cache, int64_t cluster_index, uint64_t *ret_offset);

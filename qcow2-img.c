@@ -1445,22 +1445,6 @@ static int _bdrv_pwrite(BlockDriverState *bs, int64_t offset, char *buf, int byt
 	return bytes;
 }
 
-static int bdrv_write_zeros(BlockDriverState *bs, int64_t offset, int bytes)
-{
-    int ret = bs->drv->bdrv_co_pwrite_zeroes(bs, offset>>BDRV_SECTOR_BITS, bytes>>BDRV_SECTOR_BITS, BDRV_REQ_ZERO_WRITE);
-    if(ret < 0){
-        if(ret == -ENOTSUP){
-            char *buf = calloc(bytes, 1);
-            ret = _bdrv_pwrite(bs, offset, buf, bytes);
-            free(buf);
-            return ret;
-        }
-        return ret;
-    }
-    return bytes;
-}
-
-
 #define FORMAT_OUTPUT_QCOW2 (0)
 #define FORMAT_OUTPUT_HYPERLAYER (1)
 
