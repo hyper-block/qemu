@@ -2023,7 +2023,7 @@ static int img_layer_patch(int argc, char **argv)
 	}
 
 	if(input_format == FORMAT_OUTPUT_QCOW2){
-		blk = img_open(image_opts, filename, fmt, BDRV_O_RDWR, writethrough, quiet);
+		blk = img_open(image_opts, filename, fmt, BDRV_O_RDWR|BDRV_O_NO_BACKING, writethrough, quiet);
 		if (!blk){
 			error_report("error open img: %s", filename);
 			return 1;
