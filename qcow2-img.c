@@ -1737,7 +1737,7 @@ static int img_layer_dump(int argc, char **argv)
 		}
 		bs = blk_bs(blk);
     }else if(output_format == FORMAT_OUTPUT_HYPERLAYER){
-    	fd = open(filename, O_RDWR|O_EXCL|O_CREAT);
+    	fd = open(filename, O_RDWR|O_EXCL|O_CREAT, 0600);
     	if(fd < 0){
     		error_report("error open filename %s", filename);
     		return 1;
