@@ -913,19 +913,21 @@ static int img_commit2(int argc, char **argv)
 		goto done;
 	}
 
-	snapshotid = search_snapshot_by_name(layername, &snapshotindex, NULL, NULL, NULL, base_info);
-	if(snapshotid < 0){
-		error_setg_errno(&local_err, -1, "error did not find snapshot %s in backing file %s", layername, tmplate_name);
-		ret = -1;
-		goto done;
-	}
-	char str_snapshotid[32];
-	sprintf(str_snapshotid, "%ld", snapshotid);
-	ret = bdrv_snapshot_goto(base_bs, str_snapshotid);
-	if(ret < 0){
-		error_setg_errno(&local_err, -1, "error goto snapshot %ld", snapshotid);
-		ret = -1;
-		goto done;
+	if(strlen(layername) != 0){
+		snapshotid = search_snapshot_by_name(layername, &snapshotindex, NULL, NULL, NULL, base_info);
+		if(snapshotid < 0){
+			error_setg_errno(&local_err, -1, "error did not find snapshot %s in backing file %s", layername, tmplate_name);
+			ret = -1;
+			goto done;
+		}
+		char str_snapshotid[32];
+		sprintf(str_snapshotid, "%ld", snapshotid);
+		ret = bdrv_snapshot_goto(base_bs, str_snapshotid);
+		if(ret < 0){
+			error_setg_errno(&local_err, -1, "error goto snapshot %ld", snapshotid);
+			ret = -1;
+			goto done;
+		}
 	}
 
 	struct Qcow2TemplateArgs args;
@@ -1127,20 +1129,22 @@ static int img_commit(int argc, char **argv)
         goto done;
     }
 
-    snapshotid = search_snapshot_by_name(layername, &snapshotindex, NULL, NULL, NULL, base_info);
-	if(snapshotid < 0){
-		error_setg_errno(&local_err, -1, "error did not find snapshot %s in backing file %s", layername, tmplate_name);
-		ret = -1;
-		goto done;
-	}
-	char str_snapshotid[32];
-	sprintf(str_snapshotid, "%ld", snapshotid);
-	ret = bdrv_snapshot_goto(base_bs, str_snapshotid);
-	if(ret < 0){
-		error_setg_errno(&local_err, -1, "error goto snapshot %ld", snapshotid);
-		ret = -1;
-		goto done;
-	}
+    if(strlen(layername) != 0){
+		snapshotid = search_snapshot_by_name(layername, &snapshotindex, NULL, NULL, NULL, base_info);
+		if(snapshotid < 0){
+			error_setg_errno(&local_err, -1, "error did not find snapshot %s in backing file %s", layername, tmplate_name);
+			ret = -1;
+			goto done;
+		}
+		char str_snapshotid[32];
+		sprintf(str_snapshotid, "%ld", snapshotid);
+		ret = bdrv_snapshot_goto(base_bs, str_snapshotid);
+		if(ret < 0){
+			error_setg_errno(&local_err, -1, "error goto snapshot %ld", snapshotid);
+			ret = -1;
+			goto done;
+		}
+    }
 
     cbi = (CommonBlockJobCBInfo){
         .errp = &local_err,
