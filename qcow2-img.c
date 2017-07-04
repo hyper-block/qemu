@@ -1573,10 +1573,12 @@ static void dump_layer(void *_args)
         error_exit("count_increment_clusters failed");
     }
 
-    char actual_size[32];
-    sprintf(actual_size, "%ld", increament_cluster_count * s->cluster_size);
-    add_kv(args->kvs, ACTUAL_SIZE, actual_size);
-    write_hy_kvs(args->fd, args->kvs);
+    if(args->output_format == FORMAT_OUTPUT_HYPERLAYER){
+		char actual_size[32];
+		sprintf(actual_size, "%ld", increament_cluster_count * s->cluster_size);
+		add_kv(args->kvs, ACTUAL_SIZE, actual_size);
+		write_hy_kvs(args->fd, args->kvs);
+    }
 
     uint64_t i;
     for(i = 0; i < total_cluster_nb; i++) {
