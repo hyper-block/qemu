@@ -423,7 +423,7 @@ static int _bdrv_pwrite(BlockDriverState *bs, int64_t offset, char *buf, int byt
 
 int bdrv_write_zeros(BlockDriverState *bs, int64_t offset, int bytes)
 {
-    int ret = bs->drv->bdrv_co_pwrite_zeroes(bs, offset>>BDRV_SECTOR_BITS, bytes>>BDRV_SECTOR_BITS, BDRV_REQ_ZERO_WRITE);
+    int ret = bs->drv->bdrv_co_pwrite_zeroes(bs, offset, bytes, BDRV_REQ_ZERO_WRITE);
     if(ret < 0){
         if(ret == -ENOTSUP){
             char *buf = calloc(bytes, 1);
