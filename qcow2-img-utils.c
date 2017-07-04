@@ -918,7 +918,7 @@ int qcow2_template_clone(BlockDriverState *bs, BlockDriverState *clone_des_bs, b
 			if(r == 2){
 				ret = bdrv_write_zeros(clone_des_bs, cluster_index<<s->cluster_bits, s->cluster_size);
 				if(ret < 0){
-					error_report("error bdrv_write_zeros is %ld", cluster_index);
+					error_report("error bdrv_write_zeros is %ld, ret %d", cluster_index, ret);
 					goto out1;
 				}
 			}else{ // r == 1
