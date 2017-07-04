@@ -1483,6 +1483,10 @@ static int search_kv(struct KV *kvs, const char *k, char *v)
 			continue;
 		}
 		strcpy(v, kvs[i].val);
+		int len = strlen(v);
+		if(v[len-1] == '\n'){
+			v[len-1] = '\0';
+		}
 		return 0;
 	}
 	return -1;
@@ -1819,14 +1823,15 @@ static int get_hyperlayer_kvs(struct KV *kvs, FILE* fd)
 		if(len == 1){
 			break;
 		}
-		buf[len-1] = '\0';
+		buf[len-1] = '\0'; // \n set to 0
 		char *sp = strchr(buf, ':');
 		if(!sp){
 			error_report("error key value %s", buf);
 			return -1;
 		}
 		*sp = '\0';
-		sp++;
+		sp++; // :
+		sp++; // space
 		add_kv(kvs, buf, sp);
 	}
 	return 0;
@@ -2080,7 +2085,7 @@ static int img_layer_patch(int argc, char **argv)
 		int snapshotindex = 0;
 		int64_t snapshotid = search_snapshot_by_name(parrent_layername, &snapshotindex, NULL, NULL, NULL, base_info);
 		if(snapshotid < 0){
-			error_report("error did not find snapshot %s in backing file %s", parrent_layername, tmplate_name);
+			error_report("error did not find snapshot \"%s\" in backing file %s", parrent_layername, tmplate_name);
 			return -1;
 		}
 		sprintf(str_snapshotid, "%ld", snapshotid);
