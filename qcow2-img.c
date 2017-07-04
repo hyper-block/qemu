@@ -2075,18 +2075,20 @@ static int img_layer_patch(int argc, char **argv)
 		}
 	}
 
-	int snapshotindex = 0;
-	int64_t snapshotid = search_snapshot_by_name(parrent_layername, &snapshotindex, NULL, NULL, NULL, base_info);
-	if(snapshotid < 0){
-		error_setg_errno(&local_err, -1, "error did not find snapshot %s in backing file %s", parrent_layername, tmplate_name);
-		return -1;
-	}
-	char str_snapshotid[32];
-	sprintf(str_snapshotid, "%ld", snapshotid);
-	ret = bdrv_snapshot_goto(base_bs, str_snapshotid);
-	if(ret < 0){
-		error_setg_errno(&local_err, -1, "error goto snapshot %ld", snapshotid);
-		return -1;
+	char str_snapshotid[32] = "";
+	if(strlen(parrent_layername) != 0){
+		int snapshotindex = 0;
+		int64_t snapshotid = search_snapshot_by_name(parrent_layername, &snapshotindex, NULL, NULL, NULL, base_info);
+		if(snapshotid < 0){
+			error_setg_errno(&local_err, -1, "error did not find snapshot %s in backing file %s", parrent_layername, tmplate_name);
+			return -1;
+		}
+		sprintf(str_snapshotid, "%ld", snapshotid);
+		ret = bdrv_snapshot_goto(base_bs, str_snapshotid);
+		if(ret < 0){
+			error_setg_errno(&local_err, -1, "error goto snapshot %ld", snapshotid);
+			return -1;
+		}
 	}
 
     struct patch_layer_args args;
@@ -2102,7 +2104,9 @@ static int img_layer_patch(int argc, char **argv)
     	main_loop_wait(false);
     }
     if(args.ret != 0){
-    	bdrv_snapshot_goto(base_bs, str_snapshotid);
+    	if(strlen(str_snapshotid) != 0){
+    		bdrv_snapshot_goto(base_bs, str_snapshotid);
+    	}
     	blk_unref(base_blk);
         goto fail;
     }
