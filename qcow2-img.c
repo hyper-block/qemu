@@ -1858,6 +1858,8 @@ get:
 		error_report("error parse offset and len, %s", desc);
 		return -1;
 	}
+	*len *= SECTOR_SIZE;
+	*offset *= SECTOR_SIZE;
 	*buf = malloc(*len);
 	ret = fread(buf, 1, *len, fd);
 	if(ret != *len){
