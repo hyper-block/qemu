@@ -1913,7 +1913,7 @@ static void patch_layer(void *_args)
     		}
     		ret = _bdrv_pwrite(args->base_bs, offset, buf, len);
     		if(ret != len){
-    			error_report("error bdrv_pwrite ret is %d offset %ld len %ld, bs size %ld", ret, offset, len, args->base_bs->total_sectors * 512);
+    			error_report("error bdrv_pwrite ret is %d offset %ld len %d, bs size %ld", ret, offset, len, args->base_bs->total_sectors * 512);
     			goto fail;
     		}
     	}
