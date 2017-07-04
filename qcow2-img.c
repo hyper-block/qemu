@@ -103,6 +103,7 @@ static void QEMU_NORETURN help(void)
             "info filename\n"
             "commit [-t <cache>] [-s <snapshot>] -m <commit-message> filename\n"
     		"commit2 [-t <cache>] [-s <snapshot>] -m <commit-message> filename\n"
+    		"patch -t <patch to template> [-f <format input, 0/1>] [-s <snapshot>(need if format is qcow2)] filename"
             "layerdump -t <template file> -l <layer UUID>  -f <format output, 0/1> filename\n"
             "layerremove -l <layer UUID> filename\n"
             "mount -c </dev/nbdx> filename\n"
@@ -734,6 +735,25 @@ static void qcow2_template_clone_wrap(void *_args)
 	args->done = true;
 }
 
+static int create_snapshot(BlockDriverState *bs, char *name, Error **local_err)
+{
+	QEMUSnapshotInfo sn;
+	qemu_timeval tv;
+	memset(&sn, 0, sizeof(sn));
+	pstrcpy(sn.name, sizeof(sn.name), name);
+	qemu_gettimeofday(&tv);
+	sn.date_sec = tv.tv_sec;
+	sn.date_nsec = tv.tv_usec * 1000;
+
+	int ret = bdrv_snapshot_create(bs, &sn);
+	if (ret) {
+		error_setg_errno(local_err, -1, "Could not create snapshot '%s': %d (%s)",
+				name, ret, strerror(-ret));
+		return -1;
+	}
+	return 0;
+}
+
 static int img_commit2(int argc, char **argv)
 {
     int c, ret, flags;
@@ -926,18 +946,8 @@ static int img_commit2(int argc, char **argv)
 
 	char enforced_snapshot_name[PATH_MAX*2];
 	generate_enforced_snapshotname(enforced_snapshot_name, layername, snapshot_uuid, commit_msg);
-	QEMUSnapshotInfo sn;
-	qemu_timeval tv;
-	memset(&sn, 0, sizeof(sn));
-	pstrcpy(sn.name, sizeof(sn.name), enforced_snapshot_name);
-	qemu_gettimeofday(&tv);
-	sn.date_sec = tv.tv_sec;
-	sn.date_nsec = tv.tv_usec * 1000;
-
-	ret = bdrv_snapshot_create(base_bs, &sn);
+	ret = create_snapshot(base_bs, enforced_snapshot_name, &local_err);
 	if (ret) {
-		error_setg_errno(&local_err, -1, "Could not create snapshot '%s': %d (%s)",
-					enforced_snapshot_name, ret, strerror(-ret));
 		goto done;
 	}
 
@@ -1450,6 +1460,7 @@ static int bdrv_write_zeros(BlockDriverState *bs, int64_t offset, int bytes)
 #define FORMAT_OUTPUT_QCOW2 (0)
 #define FORMAT_OUTPUT_HYPERLAYER (1)
 
+#define HYPER_LAYER_HEAD_STR "HYPERLAYER/1.0\n"
 #define COMMIT_ID "commit_id"
 #define PARRENT_ID "parrent_id"
 #define COMMIT_MSG "commit_msg"
@@ -1474,9 +1485,24 @@ static void add_kv(struct KV *kvs, const char *k, const char *v)
 	kvs[i].val = strdup(v);
 }
 
+static int search_kv(struct KV *kvs, const char *k, char *v)
+{
+	int i = 0;
+	while(kvs[i].key){
+		int ret = strcmp(k, kvs[i].key);
+		if(ret != 0){
+			i++;
+			continue;
+		}
+		strcpy(v, kvs[i].val);
+		return 0;
+	}
+	return -1;
+}
+
 static int write_hy_head(int fd)
 {
-	const char* str = "HYPERLAYER/1.0\n";
+	const char* str = HYPER_LAYER_HEAD_STR;
 	int ret = write(fd, str, strlen(str));
 	if(ret != strlen(str)){
 		error_report("error write head");
@@ -1770,11 +1796,149 @@ fail:
     return 1;
 }
 
+struct patch_layer_args
+{
+    FILE* fd;
+    struct KV *kvs;
+    BlockDriverState *bs, *base_bs;
+    int input_format;
+    int ret;
+    bool done;
+};
+
+static int get_hyperlayer_kvs(struct KV *kvs, FILE* fd)
+{
+	char buf[4096];
+	char *buf1 = fgets(buf, sizeof(buf), fd);
+	if(buf1 != buf){
+		error_report("error fgets head");
+		return -1;
+	}
+	int ret = strncmp(buf, HYPER_LAYER_HEAD_STR, strlen(HYPER_LAYER_HEAD_STR));
+	if(ret != 0){
+		error_report("error not a hyper layer format");
+		return -1;
+	}
+	while(1){
+		buf1 = fgets(buf, sizeof(buf), fd);
+		if(buf1 != buf){
+			error_report("error fgets kv");
+			return -1;
+		}
+		int len = strlen(buf);
+		if(len == 1){
+			break;
+		}
+		buf[len-1] = '\0';
+		char *sp = strchr(buf, ':');
+		if(!sp){
+			error_report("error key value %s", buf);
+			return -1;
+		}
+		*sp = '\0';
+		sp++;
+		add_kv(kvs, buf, sp);
+	}
+	return 0;
+}
+
+static int get_hyper_layer_data(FILE* fd, uint64_t *offset, uint32_t *len, char* buf)
+{
+	char desc[4096];
+	char *buf1 = NULL;
+get:
+	buf1 = fgets(buf, sizeof(desc), fd);
+	if(buf1 != desc){
+		if(feof(fd)){
+			return 0;
+		}
+		error_report("error fgets desc, %m");
+		return -1;
+	}
+	if(desc[0] != 'W'){
+		goto get;
+	}
+	int ret = sscanf(desc, "W %lx %x\n", offset, len);
+	if(ret != 2){
+		error_report("error parse offset and len, %s", desc);
+		return -1;
+	}
+	ret = fread(buf, 1, *len, fd);
+	if(ret != *len){
+		error_report("error read %m");
+		return -1;
+	}
+	return 1;
+}
+
+static void patch_layer(void *_args)
+{
+    struct patch_layer_args *args = _args;
+    Snapshot_cache_t cache, parent_cache;
+    int ret = 0;
+    init_cache(&cache, SNAPSHOT_MAX_INDEX);
+    init_cache(&parent_cache, -1);
+    uint64_t total_cluster_nb = get_layer_cluster_nb(args->bs, SNAPSHOT_MAX_INDEX);
+    BDRVQcow2State *s = args->bs->opaque;
+    const int data_size = sizeof(ClusterData_t) + s->cluster_size;
+    ClusterData_t *data = malloc(data_size);
+
+    uint64_t i;
+    if(args->input_format == FORMAT_OUTPUT_QCOW2){
+		for(i = 0; i < total_cluster_nb; i++) {
+			bool is_cluster_0_offset;
+			ret = read_snapshot_cluster_increment(args->bs, &cache, &parent_cache, i, data, &is_cluster_0_offset);
+			if(ret < 0){
+				error_report("error read snapshot cluster");
+				goto fail;
+			}
+			if(ret == 0){
+				continue;
+			}
+			uint64_t off = data->cluset_index << s->cluster_bits;
+			ret = ret == 1 ? _bdrv_pwrite(args->base_bs, off, data->buf, s->cluster_size) :
+							 bdrv_write_zeros(args->base_bs, off, s->cluster_size);
+			if(ret < s->cluster_size){
+				error_report("error bdrv_pwrite ret is %d", ret);
+				goto fail;
+			}
+		}
+    }else if(args->input_format == FORMAT_OUTPUT_HYPERLAYER){
+    	while(1){
+    		uint64_t offset;
+    		uint32_t len;
+    		ret = get_hyper_layer_data(args->fd, &offset, &len, data->buf);
+    		if(ret < 0){
+    			error_report("error get_hyper_layer_data");
+    			goto fail;
+    		}
+    		if(ret == 0){
+    			break;
+    		}
+    		ret = _bdrv_pwrite(args->base_bs, offset, data->buf, len);
+    		if(ret != len){
+    			error_report("error bdrv_pwrite ret is %d", ret);
+    			goto fail;
+    		}
+    	}
+    }
+    args->done = true;
+    args->ret = 0;
+    return;
+fail:
+	args->done = true;
+    args->ret = 1;
+    return;
+}
+
 static int img_layer_patch(int argc, char **argv)
 {
     int c;
     char *options = NULL;
     BlockDriverState *bs, *base_bs;
+    FILE* fd = NULL;
+    int ret;
+    ImageInfo *info;
     BlockBackend *blk, *base_blk = NULL;
     const char *filename = NULL;
     const char *fmt = "qcow2";
@@ -1783,7 +1947,8 @@ static int img_layer_patch(int argc, char **argv)
     bool image_opts = false;
     Error *local_err = NULL;
     bool writethrough = false;
-    int input_format = FORMAT_OUTPUT_QCOW2;
+    char current_layer_name[PATH_MAX] = "noop-snapshotname";
+    int input_format = FORMAT_OUTPUT_HYPERLAYER;
     struct KV kvs[100];
     memset(kvs, 0, sizeof(kvs));
     for(;;) {
@@ -1792,7 +1957,7 @@ static int img_layer_patch(int argc, char **argv)
                 {"object", required_argument, 0, OPTION_OBJECT},
                 {0, 0, 0, 0}
             };
-            c = getopt_long(argc, argv, "t:l:hf:",
+            c = getopt_long(argc, argv, "t:l:hf:s:",
                             long_options, NULL);
             if (c == -1) {
                 break;
@@ -1805,6 +1970,9 @@ static int img_layer_patch(int argc, char **argv)
             case 't':
                 template_filename = optarg;
                 break;
+            case 's':
+            	strcpy(current_layer_name, optarg);
+            	break;
             case 'f':
             	input_format = atoi(optarg);
             	break;
@@ -1854,35 +2022,73 @@ static int img_layer_patch(int argc, char **argv)
 		goto fail;
 	}
 
-	blk = img_open(image_opts, filename, fmt, BDRV_O_RDWR, writethrough, quiet);
-	if (!blk){
-		error_report("error open img: %s", filename);
+	if(input_format == FORMAT_OUTPUT_QCOW2){
+		blk = img_open(image_opts, filename, fmt, BDRV_O_RDWR, writethrough, quiet);
+		if (!blk){
+			error_report("error open img: %s", filename);
+			return 1;
+		}
+		bs = blk_bs(blk);
+		bdrv_query_image_info(bs, &info, &local_err);
+		if (local_err) {
+			error_report_err(local_err);
+			goto fail;
+		}
+		if (!info->has_backing_filename) {
+			error_report("No backing file found, can't patch");
+			return -1;
+		}
+	}else if(input_format == FORMAT_OUTPUT_HYPERLAYER){
+		fd = fopen(filename, "rb");
+		if(fd < 0){
+			error_report("error open filename %s", filename);
+			return 1;
+		}
+		ret = get_hyperlayer_kvs(kvs, fd);
+		if(ret < 0){
+			error_report("error get hyperlayer kvs");
+			return 1;
+		}
+	}else{
+		error_report("not support");
 		return 1;
 	}
-	bs = blk_bs(blk);
-	ImageInfo *info;
-	bdrv_query_image_info(bs, &info, &local_err);
-	if (local_err) {
-		error_report_err(local_err);
-		goto fail;
-	}
 
-	if (!info->has_backing_filename) {
-		error_report("No backing file found, can't commit");
-		return -1;
-	}
-
-	char tmplate_name[PATH_MAX] = "", layername[PATH_MAX] = "";
-	int ret = get_encoded_backingfile(info->backing_filename, tmplate_name, layername);
-	if (ret != 2 && ret != 1) {
-		error_report("error get get_encoded_backingfile, can't commit");
-		return -1;
+	char tmplate_name[PATH_MAX] = "noop-tmplate_name", parrent_layername[PATH_MAX] = "noop-parrent_layername";
+	char commit_msg[PATH_MAX] = "";
+	if(input_format == FORMAT_OUTPUT_QCOW2){
+		ret = get_encoded_backingfile(info->backing_filename, tmplate_name, parrent_layername);
+		if (ret != 2 && ret != 1) {
+			error_report("error get get_encoded_backingfile, can't commit");
+			return -1;
+		}
+	}else if(input_format == FORMAT_OUTPUT_HYPERLAYER){
+		ret = search_kv(kvs, BACKING_FILE, tmplate_name);
+		if(ret < 0){
+			error_report("error search key %s", BACKING_FILE);
+			return 1;
+		}
+		ret = search_kv(kvs, PARRENT_ID, parrent_layername);
+		if(ret < 0){
+			error_report("error search key %s", PARRENT_ID);
+			return 1;
+		}
+		ret = search_kv(kvs, COMMIT_ID, current_layer_name);
+		if(ret < 0){
+			error_report("error search key %s", COMMIT_ID);
+			return 1;
+		}
+		ret = search_kv(kvs, COMMIT_MSG, commit_msg);
+		if(ret < 0){
+			error_report("error search key %s", COMMIT_MSG);
+			return 1;
+		}
 	}
 
 	int snapshotindex = 0;
-	int64_t snapshotid = search_snapshot_by_name(layername, &snapshotindex, NULL, NULL, NULL, base_info);
+	int64_t snapshotid = search_snapshot_by_name(parrent_layername, &snapshotindex, NULL, NULL, NULL, base_info);
 	if(snapshotid < 0){
-		error_setg_errno(&local_err, -1, "error did not find snapshot %s in backing file %s", layername, tmplate_name);
+		error_setg_errno(&local_err, -1, "error did not find snapshot %s in backing file %s", parrent_layername, tmplate_name);
 		return -1;
 	}
 	char str_snapshotid[32];
@@ -1893,9 +2099,37 @@ static int img_layer_patch(int argc, char **argv)
 		return -1;
 	}
 
+    struct patch_layer_args args;
+    args.base_bs = base_bs;
+    args.bs = bs;
+    args.done = false;
+    args.kvs = kvs;
+    args.fd = fd;
+    args.input_format = input_format;
+    Coroutine *co = qemu_coroutine_create(patch_layer, &args);
+    qemu_coroutine_enter(co);
+    while(!args.done){
+    	main_loop_wait(false);
+    }
+    if(args.ret != 0){
+    	bdrv_snapshot_goto(base_bs, str_snapshotid);
+    	blk_unref(base_blk);
+        goto fail;
+    }
 
+    char enforced_snapshot_name[PATH_MAX*2];
+	generate_enforced_snapshotname(enforced_snapshot_name, parrent_layername, current_layer_name, commit_msg);
+	ret = create_snapshot(base_bs, enforced_snapshot_name, &local_err);
+	if (ret) {
+		goto fail;
+	}
 
-    blk_unref(blk);
+    if(input_format == FORMAT_OUTPUT_QCOW2){
+    	blk_unref(blk);
+    }else if(input_format == FORMAT_OUTPUT_HYPERLAYER){
+    	fclose(fd);
+    }
+
     blk_unref(base_blk);
 
     return 0;
@@ -2562,6 +2796,7 @@ static const img_cmd_t img_cmds[] = {
     DEF("info", img_info, "info filename")
     DEF("commit", img_commit, "commit [-t <cache>] [-s <snapshot>] -m <commit-message> filename")
 	DEF("commit2", img_commit2, "commit2 [-t <cache>] [-s <snapshot>] -m <commit-message> filename")
+	DEF("patch", img_layer_patch, "patch -t <patch to template> [-f <format output, 0/1>] [-s <snapshot>(need if format is qcow2)] filename")
     DEF("layerdump", img_layer_dump, "layerdump -t <template file> -l <layer UUID> -f <format output, 0/1> filename")
     DEF("layerremove", img_layer_remove, "layerremove -l <layer UUID> filename")
     DEF("mount", mount, "mount -c </dev/nbdx> filename")
