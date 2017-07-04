@@ -103,7 +103,7 @@ static void QEMU_NORETURN help(void)
             "info filename\n"
             "commit [-t <cache>] [-s <snapshot>] -m <commit-message> filename\n"
     		"commit2 [-t <cache>] [-s <snapshot>] -m <commit-message> filename\n"
-    		"patch -t <patch to template> [-f <format input, 0/1>] [-s <snapshot>(need if format is qcow2)] filename"
+    		"patch -t <patch to template> [-f <format input, 0/1>] [-s <snapshot>(need if format is qcow2)] filename\n"
             "layerdump -t <template file> -l <layer UUID>  -f <format output, 0/1> filename\n"
             "layerremove -l <layer UUID> filename\n"
             "mount -c </dev/nbdx> filename\n"
