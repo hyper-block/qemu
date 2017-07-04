@@ -1534,7 +1534,7 @@ static int write_hy_data(int fd, char* buf, uint64_t offset, uint32_t len)
 		error_report("error write data\n");
 		return -1;
 	}
-	return 0;
+	return len;
 }
 
 static int write_hy_zero_data(int fd, uint64_t offset, uint32_t len)
