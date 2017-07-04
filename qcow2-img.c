@@ -2054,7 +2054,7 @@ static int img_layer_patch(int argc, char **argv)
 		return 1;
 	}
 
-	char tmplate_name[PATH_MAX] = "noop-tmplate_name", parrent_layername[PATH_MAX] = "noop-parrent_layername";
+	char tmplate_name[PATH_MAX] = "noop-tmplate_name", parrent_layername[PATH_MAX] = "";
 	char commit_msg[PATH_MAX] = "";
 	if(input_format == FORMAT_OUTPUT_QCOW2){
 		ret = get_encoded_backingfile(info->backing_filename, tmplate_name, parrent_layername);
