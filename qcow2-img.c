@@ -1621,8 +1621,8 @@ static int img_layer_dump(int argc, char **argv)
 {
     int c;
     char *options = NULL;
-    BlockDriverState *bs, *base_bs;
-    BlockBackend *blk, *base_blk = NULL;
+    BlockDriverState *bs=NULL, *base_bs=NULL;
+    BlockBackend *blk=NULL, *base_blk = NULL;
     const char *filename = NULL;
     const char *fmt = "qcow2";
     char *template_filename = NULL;
@@ -1935,11 +1935,11 @@ static int img_layer_patch(int argc, char **argv)
 {
     int c;
     char *options = NULL;
-    BlockDriverState *bs, *base_bs;
+	BlockDriverState *bs = NULL, *base_bs = NULL;
     FILE* fd = NULL;
     int ret;
     ImageInfo *info;
-    BlockBackend *blk, *base_blk = NULL;
+    BlockBackend *blk = NULL, *base_blk = NULL;
     const char *filename = NULL;
     const char *fmt = "qcow2";
     char *template_filename = NULL;
